@@ -1,7 +1,15 @@
 ---
+############################################################################################
+#This code will run DEseq QC and differential analysis on the counts file, from rsubread   #
+#This is work in progress and is currently only set up for my experiment                   #
+#I plan to make all parts of the code relating to my experiment variable so that they can  #
+#be set	for any experiment								   #
+############################################################################################
+
+---
 title: "DEseq2_run"
 author: "Steve W."
-date: "August 6, 2018"
+date: "December 7, 2018"
 output: html_document
 ---
 
@@ -11,10 +19,10 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ##Get the input files from command line
 ```{r}
-myfile <-"/ifs/projects/proj078/1_atac_seq/4_data_for_steve/attempt_1/Peak_counts.csv"
-myfile2 <- "/ifs/projects/proj078/1_atac_seq/SteveW_Rproject/sample_sheet.csv"
-peakfile <- "/ifs/projects/proj078/1_atac_seq/4_data_for_steve/peakcalling_Jul18/mm_ATACCT16LightPulse30v1v2_R1.macs2_peaks.narrowPeak"
-genetocheck <-"fos"
+myfile <-commandArgs(trailingOnly=T)[1] #counts file
+myfile2 <- commandArgs(trailingOnly=T)[2] #Sample sheet
+peakfile <- commandArgs(trailingOnly=T)[3] # Master peak file (For gene annotation)
+genetocheck <-commandArgs(trailingOnly=T)[3]# Gene to output differential analysis for
 ```
 
 ##Load in data files, count file, sample sheet, and original bed file, also get annotation programs loaded
@@ -22,7 +30,7 @@ genetocheck <-"fos"
 library(ChIPseeker)
 library(TxDb.Mmusculus.UCSC.mm10.knownGene)
 txdb <- TxDb.Mmusculus.UCSC.mm10.knownGene
-#myfile <- "/ifs/projects/proj078/1_atac_seq/SteveW_Rproject/Peak_counts.csv"
+#myfile <- "/ifs/projects/proj078/1_atac_seq/SteveW_Rproject/Peak_counts.csv"  Use these to override command line arguments
 #myfile2 <- "/ifs/projects/proj078/1_atac_seq/SteveW_Rproject/sample_sheet.csv"
 #peakfile <- "/ifs/projects/proj078/1_atac_seq/4_data_for_steve/peakcalling_Jul18/mm_ATACCT8LightPulse30v1v2_R1.macs2_peaks.narrowPeak"
 #genetocheck <- "fos"
@@ -61,7 +69,7 @@ resultsNames(analysis)
 resLFC <- lfcShrink(analysis, coef=2, res=res) #shrunken results
 resLFC
 ```
-
+##***************Need to make these a variable that can be entered!!!!!**************
 ##Build a results table for contrasting Light Pulse 0 vs 30
 ```{r message=FALSE}
 res0vs30 <- results(analysis, contrast=c("Light_Pulse","0_minutes","30_minutes"))

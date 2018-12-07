@@ -1,7 +1,16 @@
 ---
+############################################################################################
+#This code will count against a master peaks file using .bam files as input		   #
+#It will output a counts table in .csv format						   #
+# Some parts of the code are still work in progress and are currently only set up for my   #
+#experiment 										   #
+############################################################################################
+---
+
+---
 title: "rsubread"
 author: "Steve W."
-date: "August 3, 2018"
+date: "December 7, 2018"
 output: html_document
 ---
 
