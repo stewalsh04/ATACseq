@@ -1,0 +1,181 @@
+---
+############################################################################################
+#Work in progress!!									   #
+#This code will be integrated into the pipeline to allow a user to normalise their counts  #
+#table using a house keeping gene list							   #
+############################################################################################
+---
+
+
+---
+title: "RUVseq"
+author: "Steve W."
+date: "December 7, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Load RUVseq, load in count file as matrix, set up experimental parametres as X (by CT only used for colouring), create expression set as 'set'
+```{r include=FALSE}
+library(RUVSeq)
+library(stringr)
+myfile <- "/ifs/projects/proj078/1_atac_seq/6_differential_analysis/2_paired_end/Peak_counts_copy.csv"
+counts <- as.matrix(read.csv(myfile,sep=",",row.names="Peaks"))
+x <- as.factor(rep(c(rep("CT8",10), rep("CT16", 12))))
+set <- newSeqExpressionSet(as.matrix(counts),
+phenoData = data.frame(x, row.names=colnames(counts)))
+```
+
+##Load ChIPseeker for peak annotation, load in macs2 peak file, annotate peaks
+```{r}
+library(ChIPseeker)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+txdb <- TxDb.Mmusculus.UCSC.mm10.knownGene
+peakfile <- "/ifs/projects/proj078/1_atac_seq/6_differential_analysis/2_paired_end/fully_merged_downsampled_pooled.macs2_peaks.narrowPeak"
+peak <- readPeakFile(peakfile,header=FALSE)
+peakAnno <- annotatePeak(peak, tssRegion=c(-3000, 3000),
+                         TxDb=txdb, annoDb="org.Mm.eg.db")
+anno_table <- as.data.frame(peakAnno)#        #Create data frame from gene annotations
+colnames(anno_table)[6] <- "peak"#             #Name column 6 peak
+counts_genes <- counts                        # set up new counts table for genes not peaks
+row.names(counts_genes) <- anno_table[,23]    # set row names as genes rather than peaks
+merged_gc <- aggregate(counts_genes,by=list(rownames(counts_genes)),FUN = "sum")  #Merge all peaks for each gene
+row.names(merged_gc) <- merged_gc[,1]       #Set gene Ids as row names
+merged_gc[,1] <- NULL#                     #remove gene ID column
+set2 <- newSeqExpressionSet(as.matrix(merged_gc),#      #Create new gene expression set with gene counts table
+phenoData = data.frame(x, row.names=colnames(merged_gc)))
+```
+
+#Carry out RLE and PCA on data before any normalisation (For gene counts table)
+```{r}
+library(RColorBrewer)
+colors <- brewer.pal(3, "Set2")
+plotRLE(set2, outline=FALSE, ylim=c(-4, 4), col=colors[x])
+plotPCA(set2, col=colors[x], cex=1.2)
+```
+
+#Normalise by upper quartile and plot RLE/PCA (For Gene counts table)
+```{r}
+set2 <- betweenLaneNormalization(set2, which="upper")
+plotRLE(set2, outline=FALSE, ylim=c(-4, 4), col=colors[x])
+plotPCA(set2, col=colors[x], cex=1.2)
+```
+
+##Test gene counts table against emperical controls
+```{r}
+design <- model.matrix(~x, data=pData(set))
+y <- DGEList(counts=counts(set), group=x)
+y <- calcNormFactors(y, method="upperquartile")
+y <- estimateGLMCommonDisp(y, design)
+y <- estimateGLMTagwiseDisp(y, design)
+fit <- glmFit(y, design)
+lrt <- glmLRT(fit, coef=2)
+top <- topTags(lrt, n=nrow(set))$table
+empirical <- rownames(set2)[which(!(rownames
+                                   (set2) %in% rownames(top)[1:5000]))]
+set3 <- RUVg(set2, empirical, k=1)
+```
+
+#Plot PCA/RLE against gene counts table normalised by empirical controls
+```{r}
+plotRLE(set3, outline=FALSE, ylim=c(-4, 4), col=colors[x])
+plotPCA(set3, col=colors[x], cex=1.2)
+```
+
+##Load in light pulse data from sik paper and time of day data from  Olive et al 2015. Find genes not induced by light from aarti data, ie house keeping genes
+```{r}
+myfile2 <- "/ifs/projects/proj078/1_atac_seq/8_RUVseq/aarti_sik1.csv"
+myfile3 <- "/ifs/projects/proj078/1_atac_seq/8_RUVseq/time_of_day.csv"
+aarti_rna <- as.data.frame(read.csv(myfile2,sep=",", stringsAsFactors=FALSE))
+timeofday <- as.data.frame(read.csv(myfile3,sep=",",header=TRUE, stringsAsFactors=FALSE))
+aarti_rna$LP30induction <- (aarti_rna$LP30 - aarti_rna$Sham)
+aarti_rna$LP60induction <- (aarti_rna$LP60 - aarti_rna$Sham)
+```
+
+##Filter out genes that are expressed but whose expression does not change by light or time of day
+```{r}
+library(dplyr)
+hk_time <- filter(timeofday, Dynamic_range < 2, Expression_level > 100, DESeq2.padj < 0.05)
+hk_time_genes <- hk_time$Gene_ID # Create a list of the genes
+hk_light <- filter(aarti_rna, LP30induction < 0.25, LP30induction > -0.25, LP60induction < 0.25, LP60induction > -0.25)
+hk_light_genes <- hk_light$Gene_Symbol
+genes_in_both <- hk_light_genes[which(hk_light_genes %in% hk_time_genes)] #Create a list of genes in both
+```
+
+##Venn plot to check gene lists
+```{r}
+require("gplots")
+venn(list(first.vector = hk_time_genes, second.vector = hk_light_genes))
+```
+
+##Create count tables from hk gene lists, data extracted from set2
+```{r}
+hk_light_counts <- rownames(set2)[which(!(hk_light_genes %in% unlist(rownames(merged_gc))))]
+hk_time_counts <- rownames(set2)[which(!(hk_time_genes %in% unlist(rownames(merged_gc))))]
+hk_both_counts <- rownames(set2)[which(!(genes_in_both %in% unlist(rownames(merged_gc))))]
+```
+
+##Create an expression set for each of the house keeping gene sets
+```{r}
+set4 <- RUVg(set2, hk_light_counts, k=1)
+set5 <- RUVg(set2, hk_time_counts, k=1)
+set6 <- RUVg(set2, hk_both_counts, k=1)
+```
+
+##Plot PCA/RLE for each expression set normalised by hk genes
+```{r}
+plotRLE(set4, outline=FALSE, ylim=c(-4, 4), col=colors[x])
+plotPCA(set4, col=colors[x], cex=1.2)
+plotRLE(set5, outline=FALSE, ylim=c(-4, 4), col=colors[x])
+plotPCA(set5, col=colors[x], cex=1.2)
+plotRLE(set6, outline=FALSE, ylim=c(-4, 4), col=colors[x])
+plotPCA(set6, col=colors[x], cex=1.2)
+```
+
+##This code creates a new counts table for genes with peaks near their promoters
+```{r}
+anno_tableprom <- as.data.frame(peakAnno) #Make a new copy of the annotation table
+colnames(anno_tableprom)[6] <- "peak"#             #Name column 6 of new table peak
+counts_prom <- counts                        # set up new counts table for promoters not peaks (or genes)
+row.names(counts_prom) <- anno_tableprom[,23]    # set row names as genes (nearest promoters) rather than peaks
+```
+
+```{r}
+anno_tableprom <- filter(anno_tableprom, grepl("Promoter",annotation))  #Remove all genes that do not have peaks near promoters
+counts_prom <-counts_prom[(which(rownames(counts_prom) %in% anno_tableprom[,23])),] # Remove all genes that are not in the promoter annotation
+```
+
+```{r}
+#table (The one giving the genes with peaks near promoters)
+merged_pc <- aggregate(counts_prom,by=list(rownames(counts_prom)),FUN = "sum")  #Merge all peaks for each gene in new promoter counts table
+row.names(merged_pc) <- merged_pc[,1]       #Set gene Ids as row names
+merged_pc[,1] <- NULL#                     #remove gene ID column
+setprom <- newSeqExpressionSet(as.matrix(merged_pc),#      #Create new gene expression set with promoter gene counts table
+phenoData = data.frame(x, row.names=colnames(merged_pc)))
+```
+
+```{r}
+hk_light_counts <- rownames(counts_genes)[which(!(hk_light_genes %in% (rownames(counts_genes))))]  ##Which not working!!!
+hk_time_counts <- rownames(set2)[which(!(hk_time_genes %in% unlist(rownames(merged_gc))))]
+hk_both_counts <- rownames(set2)[which(!(genes_in_both %in% unlist(rownames(merged_gc))))]
+```
+
+
+##Make new counts tables for hk genes, but only for genes with peaks near promoters
+```{r}
+hk_light_counts_prom<- rownames(counts_prom)[which(!(hk_light_genes %in% rownames(counts_prom)))]
+hk_time_counts_prom <- rownames(counts)[which(!(hk_time_genes %in% unlist(rownames(counts))))]
+hk_both_counts_prom <- rownames(counts)[which(!(genes_in_both %in% unlist(rownames(counts))))]
+```
+
+
+
+```{r}
+hk_light_counts_test<- hk_light_counts_prom[which(hk_light_counts_prom %in% hk_light_counts)]
+```
+
+
+
