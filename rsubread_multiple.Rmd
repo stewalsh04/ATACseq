@@ -1,0 +1,58 @@
+---
+title: "rsubread"
+author: "Steve W."
+date: "August 3, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Upload the Data
+```{r}
+library(stringr)
+arg1 <- commandArgs(trailingOnly=T)[1]
+bamfile <- strsplit(arg1,',')[[1]]
+samplename <- bamfile.labels <- gsub(".bam", "", basename(bamfile))
+samplename <- str_split_fixed(samplename, "ATAC", 2) #This reformats the name, comment out lines 18-20, to keep original name
+samplename <- str_split_fixed(samplename[,2], "_f", 2)
+samplename <- samplename[,1]
+gffFile1 <- commandArgs(trailingOnly=T)[2] #Peak file
+workingdir <- commandArgs(trailingOnly=T)[3]
+```
+
+##Run the .bam files through Rsubread with master peaks table, creates list of counts and stats 
+```{r echo=TRUE,results=FALSE}
+library(Rsubread)
+stats_table <- list()
+counts_table <-list()
+for (i in 1:length(bamfile)){
+  counts1 <- featureCounts(files=bamfile[i], annot.ext=gffFile1, isGTFAnnotationFile=TRUE,  nthreads=10,isPairedEnd = TRUE,GTF.featureType="PEAK",GTF.attrType = "peakid")
+  counts_table[[i]] <- counts1$counts
+  stats_table[[i]] <- counts1$stat
+}
+```
+
+##Use the counts table to create a named matrix ready for deseq2
+```{r}
+peak_table <- data.frame(Peaks=row.names(counts_table[[1]]))
+for (i in 1:length(bamfile)){
+  peak_table <- cbind(peak_table,Counts=as.numeric(counts_table[[i]]))
+  names(stats_table)[i] <- samplename[i]
+}
+for (i in 1:length(bamfile)){
+  colnames(peak_table)[i+1] <- samplename[i]
+}
+head(peak_table)
+```
+
+##Write out counts/stats table to csv
+```{r}
+peakcsv <- "/Peak_counts.csv"
+statscsv <- "/subread_stats.csv"
+peakcsv <- paste(workingdir,peakcsv, sep = "")
+statscsv <- paste(workingdir,statscsv, sep = "")
+write.table(peak_table,peakcsv,sep=",",row.names = FALSE)
+write.table(stats_table,statscsv,sep=",",row.names = FALSE)
+```

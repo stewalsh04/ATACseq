@@ -1,0 +1,205 @@
+---
+title: "ATACqc"
+author: "Steve W."
+date: "July 18, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo=FALSE}
+library(ATACseqQC)
+```
+
+## Upload the bam files
+
+```{r message=FALSE}
+args <- commandArgs(trailingOnly=T)[1]
+bamfile <- args
+bamfile.labels <- gsub(".bam", "", basename(bamfile))
+workingdir <- commandArgs(trailingOnly=T)[2]
+```
+
+##Generate fragment size
+```{r}
+fragSize <- fragSizeDist(bamfile, bamfile.labels)
+```
+##Nucleosome positioning
+##Move the start sites
+##Read in the .bam file tags
+
+```{r}
+tags <- c("AS", "XN", "XM", "XO", "XG", "NM", "MD", "YS", "YT")
+```
+
+##Output files to outpath
+
+```{r}
+outPath <- "splited"
+outPath <- paste(workingdir,outPath,"_",bamfile.labels, sep = "")
+dir.create(outPath)
+```
+
+## shift the coordinates of 5'ends of alignments in the bam file
+
+```{r message=FALSE}
+library(BSgenome.Mmusculus.UCSC.mm10)
+seqlev <- c("chr1","chr2","chr3","chr4","chr5","chr6","chr7","chr8","chr9","chr10","chr11","chr12","chr13","chr14","chr15","chr16","chr17","chr18","chr19","chrX","chrY")
+which <- as(seqinfo(Mmusculus)["chr1"], "GRanges")
+gal <- readBamFile(bamfile, tag=tags, which=which, asMates=TRUE)
+gal1 <- shiftGAlignmentsList(gal)
+shiftedBamfile <- file.path(outPath, "shifted.bam")
+export(gal1, shiftedBamfile)
+```
+
+##Load in mouse libraries and add to txs
+```{r message=FALSE}
+library(GenomicScores)
+gsco <- getGScores("phastCons60way.UCSC.mm10")
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+txs <- transcripts(TxDb.Mmusculus.UCSC.mm10.knownGene)
+```
+
+## run program for chromosome 1 only
+
+```{r message=FALSE}
+txs <- txs[seqnames(txs) %in% "chr1"]
+genome <- Mmusculus
+```
+## split the reads into NucleosomeFree, mononucleosome, dinucleosome and trinucleosome.
+
+```{r echo=FALSE}
+objs <- splitGAlignmentsByCut(gal1, txs=txs, genome=genome,
+                              conservation=gsco)
+```
+## Save the binned alignments into bam files.
+
+```{r message=FALSE}
+null <- writeListOfGAlignments(objs, outPath)
+```
+## List files to split
+```{r message=FALSE}
+dir(outPath)
+
+##  [1] "NucleosomeFree.bam"     "NucleosomeFree.bam.bai"
+##  [3] "dinucleosome.bam"       "dinucleosome.bam.bai"  
+##  [5] "inter1.bam"             "inter1.bam.bai"        
+##  [7] "inter2.bam"             "inter2.bam.bai"        
+##  [9] "inter3.bam"             "inter3.bam.bai"        
+## [11] "mononucleosome.bam"     "mononucleosome.bam.bai"
+## [13] "others.bam"             "others.bam.bai"        
+## [15] "shifted.bam"            "shifted.bam.bai"       
+## [17] "trinucleosome.bam"      "trinucleosome.bam.bai"
+```
+
+##Heatmap and coverage curve for nucleosome positions
+
+```{r message=FALSE}
+library(ChIPpeakAnno)
+bamfiles <- file.path(outPath,
+                     c("NucleosomeFree.bam",
+                     "mononucleosome.bam",
+                     "dinucleosome.bam",
+                     "trinucleosome.bam"))
+cumulativePercentage(bamfiles[1:2], as(seqinfo(Mmusculus)["chr1"], "GRanges"))
+TSS <- promoters(txs, upstream=0, downstream=1)
+TSS <- unique(TSS)
+```
+
+## estimate the library size for normalization
+
+```{r message=FALSE}
+(librarySize <- estLibSize(bamfiles))
+## splited/NucleosomeFree.bam splited/mononucleosome.bam 
+##                      33374                       2142 
+##   splited/dinucleosome.bam  splited/trinucleosome.bam 
+##                       2041                        454
+```
+
+## calculate the signals around TSSs.
+
+```{r messsage=FALSE}
+NTILE <- 101
+dws <- ups <- 1010
+sigs <- enrichedFragments(gal=objs[c("NucleosomeFree", 
+                                     "mononucleosome",
+                                     "dinucleosome",
+                                     "trinucleosome")], 
+                          TSS=TSS,
+                          librarySize=librarySize,
+                          seqlev=seqlev,
+                          TSS.filter=0.5,
+                          n.tile = NTILE,
+                          upstream = ups,
+                          downstream = dws)
+```
+## log2 transformed signals
+```{r message=FALSE}
+sigs.log2 <- lapply(sigs, function(.ele) log2(.ele+1))
+```
+##plot heatmap
+```{r message=FALSE}
+featureAlignedHeatmap(sigs.log2, reCenterPeaks(TSS, width=ups+dws),
+                      zeroAt=.5, n.tile=NTILE)
+```
+
+## get signals normalized for nucleosome-free and nucleosome-bound regions.
+
+```{r message=FALSE}
+out <- featureAlignedDistribution(sigs, 
+                                  reCenterPeaks(TSS, width=ups+dws),
+                                  zeroAt=.5, n.tile=NTILE, type="l", 
+                                  ylab="Averaged coverage")
+```
+
+## rescale the nucleosome-free and nucleosome signals to 0~1
+
+```{r message=FALSE}
+range01 <- function(x){(x-min(x))/(max(x)-min(x))}
+out <- apply(out, 2, range01)
+matplot(out, type="l", xaxt="n", 
+        xlab="Position (bp)", 
+        ylab="Fraction of signal")
+axis(1, at=seq(0, 100, by=10)+1, 
+     labels=c("-1K", seq(-800, 800, by=200), "1K"), las=2)
+abline(v=seq(0, 100, by=10)+1, lty=2, col="gray")
+```
+
+## foot prints
+
+```{r message=FALSE}
+library(MotifDb)
+CTCF <- query(MotifDb, c("CTCF"))
+CTCF <- as.list(CTCF)
+print(CTCF[[1]], digits=2)
+##      1    2    3    4    5    6     7     8     9      10    11      12
+## A 0.17 0.23 0.29 0.10 0.33 0.06 0.052 0.037 0.023 0.00099 0.245 0.00099
+## C 0.42 0.28 0.30 0.32 0.11 0.33 0.562 0.005 0.960 0.99702 0.670 0.68901
+## G 0.25 0.23 0.26 0.27 0.42 0.55 0.052 0.827 0.013 0.00099 0.027 0.00099
+## T 0.16 0.27 0.15 0.31 0.14 0.06 0.334 0.131 0.004 0.00099 0.058 0.30900
+##        13    14    15    16    17      18    19   20
+## A 0.00099 0.050 0.253 0.004 0.172 0.00099 0.019 0.19
+## C 0.99702 0.043 0.073 0.418 0.150 0.00099 0.063 0.43
+## G 0.00099 0.017 0.525 0.546 0.055 0.99702 0.865 0.15
+## T 0.00099 0.890 0.149 0.032 0.623 0.00099 0.053 0.23
+sigs <- factorFootprints(shiftedBamfile, pfm=CTCF[[1]], 
+                         genome=genome,
+                         min.score="90%", seqlev=seqlev,
+                         upstream=100, downstream=100)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+

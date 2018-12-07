@@ -1,0 +1,242 @@
+---
+title: "DEseq2_run"
+author: "Steve W."
+date: "August 6, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Get the input files from command line
+```{r}
+myfile <-"/ifs/projects/proj078/1_atac_seq/4_data_for_steve/attempt_1/Peak_counts.csv"
+myfile2 <- "/ifs/projects/proj078/1_atac_seq/SteveW_Rproject/sample_sheet.csv"
+peakfile <- "/ifs/projects/proj078/1_atac_seq/4_data_for_steve/peakcalling_Jul18/mm_ATACCT16LightPulse30v1v2_R1.macs2_peaks.narrowPeak"
+genetocheck <-"fos"
+```
+
+##Load in data files, count file, sample sheet, and original bed file, also get annotation programs loaded
+```{r include=FALSE, echo=TRUE}
+library(ChIPseeker)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+txdb <- TxDb.Mmusculus.UCSC.mm10.knownGene
+#myfile <- "/ifs/projects/proj078/1_atac_seq/SteveW_Rproject/Peak_counts.csv"
+#myfile2 <- "/ifs/projects/proj078/1_atac_seq/SteveW_Rproject/sample_sheet.csv"
+#peakfile <- "/ifs/projects/proj078/1_atac_seq/4_data_for_steve/peakcalling_Jul18/mm_ATACCT8LightPulse30v1v2_R1.macs2_peaks.narrowPeak"
+#genetocheck <- "fos"
+counts <- as.matrix(read.csv(myfile,sep=",",row.names="Peaks"))
+colnames <- read.csv(myfile2,sep=",", row.names=1)
+peak <- readPeakFile(peakfile)
+```
+
+##Peak Annotation
+```{r include=FALSE, echo=TRUE}
+peakAnno <- annotatePeak(peakfile, tssRegion=c(-3000, 3000),
+                         TxDb=txdb, annoDb="org.Mm.eg.db")
+anno_table <- as.data.frame(peakAnno)
+colnames(anno_table)[6] <- "peak"
+```
+
+##Set up experimental parameters to analyse
+```{r include=FALSE, echo=TRUE}
+library("DESeq2")
+analysis <- DESeqDataSetFromMatrix(countData = counts,
+                              colData = colnames,
+                              design = ~ Light_Pulse + CT) #From sample sheet
+```
+
+##Pre filter the data
+```{r message=FALSE}
+keep <- rowSums(counts(analysis)) >= 10
+analysis <- analysis[keep,]
+```
+
+##Carry out Differential Expression Analysis
+```{r include=FALSE, echo=TRUE}
+analysis <- DESeq(analysis)
+res <- results(analysis)
+resultsNames(analysis)
+resLFC <- lfcShrink(analysis, coef=2, res=res) #shrunken results
+resLFC
+```
+
+##Build a results table for contrasting Light Pulse 0 vs 30
+```{r message=FALSE}
+res0vs30 <- results(analysis, contrast=c("Light_Pulse","0_minutes","30_minutes"))
+```
+
+##Build a results table for contrasting Light Pulse 0 vs 60
+```{r message=FALSE}
+res0vs60 <- results(analysis, contrast=c("Light_Pulse","0_minutes","60_minutes"))
+```
+
+##Build a results table for contrasting Light Pulse 30 vs 60
+```{r message=FALSE}
+res30vs60 <- results(analysis, contrast=c("Light_Pulse","30_minutes","60_minutes"))
+```
+
+##Log fold change 0 vs 30
+```{r include=FALSE, echo=TRUE}
+resultsNames(analysis)
+resLFC0vs30 <- lfcShrink(analysis, contrast=c("Light_Pulse","0_minutes","30_minutes"))
+```
+
+##Log fold change 0 vs 60
+```{r include=FALSE, echo=TRUE}
+resultsNames(analysis)
+resLFC0vs60 <- lfcShrink(analysis, contrast=c("Light_Pulse","0_minutes","60_minutes"))
+```
+
+##Log fold change30 vs 60
+```{r include=FALSE, echo=TRUE}
+resultsNames(analysis)
+resLFC30vs60 <- lfcShrink(analysis, contrast=c("Light_Pulse","30_minutes","60_minutes"))
+```
+
+##Order by p-value 0 vs 30
+```{r include=FALSE, echo=TRUE}
+res0vs30Ordered <- res0vs30[order(res0vs30$pvalue),]
+```
+
+##Order by p-value 0 vs 36
+```{r include=FALSE, echo=TRUE}
+res0vs60Ordered <- res0vs60[order(res0vs60$pvalue),]
+```
+
+##Order by p-value 0 vs 30
+```{r include=FALSE, echo=TRUE}
+resOrdered30vs60 <- res30vs60[order(res30vs60$pvalue),]
+```
+
+##Plot data
+```{r message=FALSE}
+plotMA(res0vs30, ylim=c(-2,2))
+plotMA(res0vs60, ylim=c(-2,2))
+plotMA(res30vs60, ylim=c(-2,2))
+```
+
+#Plot shrunken data
+```{r message=FALSE}
+plotMA(resLFC0vs30, ylim=c(-2,2))
+plotMA(resLFC0vs60, ylim=c(-2,2))
+plotMA(resLFC30vs60, ylim=c(-2,2))
+```
+
+##Find a gene, plot by light pulse length
+```{r warning=FALSE, message=FALSE}
+library(dplyr)
+library(stringr)
+mygene <- anno_table %>% filter(str_detect(SYMBOL, genetocheck))
+mygene1 <- anno_table %>% filter(str_detect(GENENAME, genetocheck))
+mygene2 <- rbind(mygene,mygene1)
+mygene3 <- filter(anno_table,geneId==mygene2$geneId[1])
+mypeak <- as.character(mygene3$peak[1])
+print(mygene2)
+if(nrow(mygene3) < 1){
+  print("No genes")
+} else{
+  print(nrow(mygene2))
+  print(mygene2$GENENAME[1])
+  plotCounts(analysis, gene=mypeak, intgroup="Light_Pulse")
+  plotCounts(analysis, gene=mypeak, intgroup="CT")
+}
+```
+
+##Plot gene with lowest p-value
+```{r warning=FALSE}
+bestpeak<-rownames(res)[which.min(res$padj)]
+bestgene <-filter(anno_table,peak==bestpeak)
+g1 <- bestgene$geneId
+g2 <- bestgene$GENENAME
+plotCounts(analysis, gene=which.min(res$padj), intgroup="CT")
+print(g2)
+```
+
+##Combining Conditions
+```{r include=FALSE}
+analysis$group <- factor(paste0(analysis$Light_Pulse, analysis$CT))
+group <- design(analysis) <- ~ group
+analysis_multi <- DESeq(analysis)
+```
+
+#Contrast CT16 LP0 mins vs CT16 LP30 mins, this can be changed to contrast LP 60 or CT
+```{r}
+resultsNames_multi <- resultsNames(analysis_multi)
+results_multi <- results(analysis_multi, contrast=c("group", "30_minutesCT16", "0_minutesCT16"))
+#results_multi_ordered <- results_multi[order(results_multi$pvalue),]
+```
+
+#Plot with gene of lowest p-value
+```{r}
+bestpeak2<-rownames(results_multi)[which.min(results_multi$pvalue)]
+bestgene <-filter(anno_table,peak==bestpeak)
+bestgene2 <-filter(anno_table,peak==bestpeak2)
+print(bestgene2$GENENAME)
+plotCounts(analysis_multi, gene=which.min(results_multi$pvalue), intgroup="Light_Pulse")
+plotCounts(analysis_multi, gene=which.min(results_multi$pvalue), intgroup="CT")
+```
+
+
+##Data quality assessment
+##Heatmap of the count matrix
+##Set up the heatmap
+```{r}
+library("pheatmap")
+select <- order(rowMeans(counts(analysis,normalized=TRUE)),
+                decreasing=TRUE)[1:20]
+df <- as.data.frame(colData(analysis)[,c("Light_Pulse","CT")])
+ntd <- normTransform(analysis)
+```
+
+##Construct heatmap for the log2(n+1) data
+```{r}
+pheatmap(assay(ntd)[select,], cluster_rows=FALSE, show_rownames=FALSE,
+         cluster_cols=FALSE, annotation_col=df)
+```
+
+
+```{r}
+rld <- rlog(analysis, blind=FALSE)
+pheatmap(assay(rld)[select,], cluster_rows=FALSE, show_rownames=FALSE,
+         cluster_cols=FALSE, annotation_col=df)
+```
+
+##Heatmap of the sample-to-sample distances
+```{r}
+sampleDists <- dist(t(assay(rld)))
+library("RColorBrewer")
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste(rld$Light_Pulse, rld$CT, sep="-")
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+```
+
+
+##Principal component plot of the samples with Ggplot
+```{r}
+library(ggplot2)
+pcaData <- plotPCA(rld, intgroup=c("Light_Pulse", "CT"), returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+ggplot(pcaData, aes(PC1, PC2, color=Light_Pulse, shape=CT)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed()
+```
+
+#Boxplot if lots of ouliers
+#```{r}
+#par(mar=c(8,5,2,2))
+#boxplot(log10(assays(analysis)[["cooks"]]), range=0, las=2)
+#```
+
+#```{r}
+#plotDispEsts(analysis)
+#```
+
